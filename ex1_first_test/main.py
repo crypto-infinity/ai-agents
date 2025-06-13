@@ -3,13 +3,9 @@ import argparse
 from dotenv import load_dotenv
 from langchain_openai import AzureChatOpenAI, AzureOpenAIEmbeddings
 from langchain_core.vectorstores import InMemoryVectorStore
-from langchain_sqlserver import SQLServer_VectorStore
-from langchain_community.vectorstores.utils import DistanceStrategy
 from langchain_community.document_loaders import PyPDFDirectoryLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_core.prompts import PromptTemplate
-from langchain import hub
-from langgraph.graph import START, StateGraph
 from langchain_core.documents import Document
 from typing_extensions import List, TypedDict
 
@@ -22,39 +18,19 @@ def setup_llm_and_embeddings():
     llm = AzureChatOpenAI(
         azure_endpoint=os.getenv("AZURE_OPENAI_ENDPOINT"),
         azure_deployment=os.getenv("AZURE_OPENAI_DEPLOYMENT_NAME"),
-        openai_api_version=os.getenv("AZURE_OPENAI_API_VERSION"),
+        api_version=os.getenv("AZURE_OPENAI_API_VERSION"),
     )
     embeddings = AzureOpenAIEmbeddings(
         azure_endpoint=os.getenv("AZURE_OPENAI_EMBEDDINGS_ENDPOINT"),
         azure_deployment=os.getenv("AZURE_OPENAI_EMBEDDINGS_DEPLOYMENT_NAME"),
-        openai_api_version=os.getenv("AZURE_OPENAI_EMBEDDINGS_API_VERSION"),
+        api_version=os.getenv("AZURE_OPENAI_EMBEDDINGS_API_VERSION"),
     )
     return llm, embeddings
 
-# Setup Vector Stores
-def setup_vectorstores(embeddings):
+# Setup Vector Store solo in memoria
+def setup_vectorstore(embeddings):
     local_vector_store = InMemoryVectorStore(embeddings)
-    _CONNECTION_STRING = (
-        "Driver={{ODBC Driver 18 for SQL Server}};"
-        "Server=tcp:inft-dev.database.windows.net,1433;"
-        "Database=inft;"
-        "Uid={username};"
-        "Pwd={password};"
-        "Encrypt=yes;"
-        "TrustServerCertificate=no;"
-        "Connection Timeout=30;"
-    ).format(
-        username=os.getenv("SQL_SERVER_USER"),
-        password=os.getenv("SQL_SERVER_PASSWORD")
-    )
-    sql_vector_store = SQLServer_VectorStore(
-        connection_string=_CONNECTION_STRING,
-        distance_strategy=DistanceStrategy.COSINE,
-        embedding_function=embeddings,
-        embedding_length=1536,
-        table_name="dbo.Web3",
-    )
-    return local_vector_store, sql_vector_store
+    return local_vector_store
 
 # Load and split documents
 # Usa il path assoluto fornito da DOCS_DIR (montato come volume dal comando Docker)
@@ -101,10 +77,10 @@ class State(TypedDict):
     answer_history: List[str]
     user_history: List[str]
 
-def retrieve(state, local_vector_store, sql_vector_store):
+def retrieve(state, local_vector_store):
     local_results = local_vector_store.similarity_search_with_score(state["question"])
-    sql_results = sql_vector_store.similarity_search_with_score(state["question"])
-    all_results = local_results + sql_results
+    # Solo retrieval locale, niente SQL
+    all_results = local_results
     seen = set()
     deduped_results = []
     for doc, score in all_results:
@@ -131,30 +107,41 @@ def generate(state, llm, prompt):
     return {"answer": response.content, "answer_history": answer_history, "user_history": user_history}
 
 def main():
-    parser = argparse.ArgumentParser(description="Interroga l'agente via CLI")
-    parser.add_argument("question", type=str, help="Domanda da porre all'agente")
-    args = parser.parse_args()
-
+    import sys
     load_env()
     llm, embeddings = setup_llm_and_embeddings()
-    local_vector_store, sql_vector_store = setup_vectorstores(embeddings)
+    local_vector_store = setup_vectorstore(embeddings)
     load_and_split_docs(local_vector_store)
     prompt = get_prompt()
 
     answer_history = []
     user_history = []
 
-    state = {
-        "question": args.question,
-        "answer_history": answer_history,
-        "user_history": user_history,
-        "context": [],
-        "answer": ""
-    }
-    retrieval = retrieve(state, local_vector_store, sql_vector_store)
-    state["context"] = retrieval["context"]
-    result = generate(state, llm, prompt)
-    print(f'Answer: {result["answer"]}\n')
+    print("Digita la tua domanda (scrivi 'exit', 'esci', 'quit', 'fine' per terminare):")
+    while True:
+        try:
+            user_input = input('> ').strip()
+        except (EOFError, KeyboardInterrupt):
+            print("\nUscita per errore keyboard.")
+            break
+        if user_input.lower() in {"exit", "esci", "quit", "fine", "stop", "close"}:
+            print("Uscita.")
+            break
+        if not user_input:
+            continue
+        state = {
+            "question": user_input,
+            "answer_history": answer_history,
+            "user_history": user_history,
+            "context": [],
+            "answer": ""
+        }
+        retrieval = retrieve(state, local_vector_store)
+        state["context"] = retrieval["context"]
+        result = generate(state, llm, prompt)
+        print(f'Risposta: {result["answer"]}\n')
+        answer_history = result.get("answer_history", [])
+        user_history = result.get("user_history", [])
 
 if __name__ == "__main__":
     main()
