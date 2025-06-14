@@ -1,0 +1,10 @@
+langchain-sqlserver
+python-dotenv
+pypdf
+langchain-openai
+langchain
+langchain-core
+langchain-text-splitters
+langchain-community
+langgraph
+langchain-tavily
