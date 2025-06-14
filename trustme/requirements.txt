@@ -1,10 +1,19 @@
-langchain-sqlserver
+#Generics
 python-dotenv
 pypdf
-langchain-openai
+
+#For Langchain
 langchain
+langchain-openai
 langchain-core
 langchain-text-splitters
 langchain-community
-langgraph
 langchain-tavily
+
+#Langgraph
+langgraph
+
+# For postgreSQL checkpointer
+langchain_postgres
+langgraph-checkpoint-postgres
+psycopg[binary]
